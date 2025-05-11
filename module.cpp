@@ -337,7 +337,6 @@ torch::Tensor myFusedAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
 {
 
     // Q, K, V are passed in with Shape: (B, H, N, d)
-
     // Make O Tensor with Shape (B, H, N, d)
     // and O Row Tensor with Shape (N)
     at::Tensor OTensor = at::zeros({B, H, N, d}, at::kFloat);
@@ -353,7 +352,8 @@ torch::Tensor myFusedAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
     //  You can simply access this as ORow[i]
     std::vector<float> ORow = formatTensor(ORowTensor);
 
-    // -------- YOUR CODE HERE  -------- //
+// -------- YOUR CODE HERE  -------- //
+#pragma omp parallel for collapse(3)
     // We give you a template of the first three loops for your convenience
     // loop over batch
     for (int b = 0; b < B; b++)
@@ -369,9 +369,123 @@ torch::Tensor myFusedAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
                 at::Tensor ORowTensor = temp.index({torch::indexing::Slice(omp_get_thread_num(), torch::indexing::None)});
                 std::vector<float> ORow = formatTensor(ORowTensor);
                 // YOUR CODE HERE
+                // loop over Embedding Dimensionality (rows of transposed)
+
+                for (int j = 0; j < N; j++)
+                {
+                    float valQKT = 0.0;
+                    // loop over cols
+                    for (int k = 0; k < d; k++)
+                    {
+                        float valQ = fourDimRead(Q, b, h, i, k, H, N, d);
+                        float valK = fourDimRead(K, b, h, j, k, H, N, d);
+                        valQKT += valQ * valK;
+                    }
+                    // twoDimWrite(QK_t, i, j, N, valQKT);
+                    ORow[j] = valQKT;
+                }
+                // a row of Qk^t is computed here
+
+                // softmax of a row
+                float *Exparr = new float[N];
+                float sumExp = 0.0;
+                for (int j = 0; j < N; j++)
+                {
+                    // float val = twoDimRead(QK_t, i, j, N);
+                    float val = ORow[j];
+
+                    val = exp(val);
+                    Exparr[j] = val;
+                    sumExp += val;
+                }
+                for (int j = 0; j < N; j++)
+                {
+                    float val = Exparr[j] / sumExp;
+                    // twoDimWrite(QK_t, i, j, N, val);
+                    ORow[j] = val;
+                }
+                if (Exparr)
+                {
+                    delete[] Exparr;
+                }
+                // softmax of a row done
+
+                // multiplying softmaxed row with V to get attention output
+                for (int j = 0; j < d; j++)
+                {
+                    float val = 0.0;
+                    for (int k = 0; k < N; k++)
+                    {
+                        // float qkt = twoDimRead(QK_t, i, k, N);
+                        float qkt = ORow[k];
+                        float v = fourDimRead(V, b, h, k, j, H, N, d);
+                        val += qkt * v;
+                    }
+                    fourDimWrite(O, b, h, i, j, H, N, d, val);
+                }
             }
         }
     }
+
+    // for (int b = 0; b < B; b++)
+    // {
+    //     // loop over Heads
+    //     for (int h = 0; h < H; h++)
+    //     {
+
+    //         // loop over Sequence Length (rows)
+    //         for (int i = 0; i < N; i++)
+    //         {
+    //             // loop over Embedding Dimensionality (rows of transposed)
+    //             for (int j = 0; j < N; j++)
+    //             {
+    //                 float valQKT = 0.0;
+    //                 // loop over cols
+    //                 for (int k = 0; k < d; k++)
+    //                 {
+    //                     float valQ = fourDimRead(Q, b, h, i, k, H, N, d);
+    //                     float valK = fourDimRead(K, b, h, j, k, H, N, d);
+    //                     valQKT += valQ * valK;
+    //                 }
+    //                 twoDimWrite(QK_t, i, j, N, valQKT);
+    //             }
+    //             // a row of Qk^t is computed here
+
+    //             // softmax
+    //             float *Exparr = new float[N];
+    //             for (int j = 0; j < N; j++)
+    //             {
+    //                 float val = twoDimRead(QK_t, i, j, N);
+    //                 val = exp(val);
+    //                 Exparr[j] = val;
+    //                 sumExp += val;
+    //             }
+    //             for (int j = 0; j < N; j++)
+    //             {
+    //                 float val = Exparr[j] / sumExp;
+    //                 twoDimWrite(QK_t, i, j, N, val);
+    //             }
+    //             if (Exparr)
+    //             {
+    //                 delete[] Exparr;
+    //             }
+    //             // softmax done
+
+    //             // multiplying softmaxed row with V to get attention output
+    //             for (int j = 0; j < d; j++)
+    //             {
+    //                 float val = 0.0;
+    //                 for (int k = 0; k < N; k++)
+    //                 {
+    //                     float qkt = twoDimRead(QK_t, i, k, N);
+    //                     float v = fourDimRead(V, b, h, k, j, H, N, d);
+    //                     val += qkt * v;
+    //                 }
+    //                 fourDimWrite(O, b, h, i, j, H, N, d, val);
+    //             }
+    //         }
+    //     }
+    // }
 
     // DO NOT EDIT THIS RETURN STATEMENT //
     // It formats your C++ Vector O back into a Tensor of Shape (B, H, N, d) and returns it //
