@@ -427,66 +427,6 @@ torch::Tensor myFusedAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
         }
     }
 
-    // for (int b = 0; b < B; b++)
-    // {
-    //     // loop over Heads
-    //     for (int h = 0; h < H; h++)
-    //     {
-
-    //         // loop over Sequence Length (rows)
-    //         for (int i = 0; i < N; i++)
-    //         {
-    //             // loop over Embedding Dimensionality (rows of transposed)
-    //             for (int j = 0; j < N; j++)
-    //             {
-    //                 float valQKT = 0.0;
-    //                 // loop over cols
-    //                 for (int k = 0; k < d; k++)
-    //                 {
-    //                     float valQ = fourDimRead(Q, b, h, i, k, H, N, d);
-    //                     float valK = fourDimRead(K, b, h, j, k, H, N, d);
-    //                     valQKT += valQ * valK;
-    //                 }
-    //                 twoDimWrite(QK_t, i, j, N, valQKT);
-    //             }
-    //             // a row of Qk^t is computed here
-
-    //             // softmax
-    //             float *Exparr = new float[N];
-    //             for (int j = 0; j < N; j++)
-    //             {
-    //                 float val = twoDimRead(QK_t, i, j, N);
-    //                 val = exp(val);
-    //                 Exparr[j] = val;
-    //                 sumExp += val;
-    //             }
-    //             for (int j = 0; j < N; j++)
-    //             {
-    //                 float val = Exparr[j] / sumExp;
-    //                 twoDimWrite(QK_t, i, j, N, val);
-    //             }
-    //             if (Exparr)
-    //             {
-    //                 delete[] Exparr;
-    //             }
-    //             // softmax done
-
-    //             // multiplying softmaxed row with V to get attention output
-    //             for (int j = 0; j < d; j++)
-    //             {
-    //                 float val = 0.0;
-    //                 for (int k = 0; k < N; k++)
-    //                 {
-    //                     float qkt = twoDimRead(QK_t, i, k, N);
-    //                     float v = fourDimRead(V, b, h, k, j, H, N, d);
-    //                     val += qkt * v;
-    //                 }
-    //                 fourDimWrite(O, b, h, i, j, H, N, d, val);
-    //             }
-    //         }
-    //     }
-    // }
-
     // DO NOT EDIT THIS RETURN STATEMENT //
     // It formats your C++ Vector O back into a Tensor of Shape (B, H, N, d) and returns it //
     return torch::from_blob(O.data(), {B, H, N, d}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
