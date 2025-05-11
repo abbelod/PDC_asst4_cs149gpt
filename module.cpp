@@ -435,7 +435,6 @@ torch::Tensor myFusedAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
 // ---------------------------------------------------------- //
 //                PART 4: FLASH ATTENTION 		      //
 // ---------------------------------------------------------- //
-
 torch::Tensor myFlashAttention(torch::Tensor QTensor, torch::Tensor KTensor, torch::Tensor VTensor,
                                torch::Tensor QiTensor, torch::Tensor KjTensor, torch::Tensor VjTensor,
                                torch::Tensor SijTensor, torch::Tensor PijTensor, torch::Tensor PVTensor,
@@ -444,40 +443,138 @@ torch::Tensor myFlashAttention(torch::Tensor QTensor, torch::Tensor KTensor, tor
                                int B, int H, int N, int d)
 {
 
-    // Q, K, V are passed in with Shape: (B, H, N, d)
-    // Sij, Pij are passed in with Shape: (Br, Bc)
-    // Kj, Vj are passed in with Shape: (Bc, d)
-    // Qi, Oi, and PV  are passed in with Shape: (Br, d)
-    // L in passed in with Shape: (N)
-    // Li, Lij, and Lnew are passed in with shape (Br)
-
-    // Make O Tensor with Shape (B, H, N, d)
+    // Create output tensor
     at::Tensor OTensor = at::zeros({B, H, N, d}, at::kFloat);
-
-    // Format All Tensors into Vectors
     std::vector<float> O = formatTensor(OTensor);
     std::vector<float> Q = formatTensor(QTensor);
     std::vector<float> K = formatTensor(KTensor);
     std::vector<float> V = formatTensor(VTensor);
-    std::vector<float> Sij = formatTensor(SijTensor);
-    std::vector<float> Pij = formatTensor(PijTensor);
-    std::vector<float> Kj = formatTensor(KjTensor);
-    std::vector<float> Vj = formatTensor(VjTensor);
-    std::vector<float> Qi = formatTensor(QiTensor);
-    std::vector<float> Oi = formatTensor(OiTensor);
-    std::vector<float> l = formatTensor(LTensor);
-    std::vector<float> PV = formatTensor(PVTensor);
-    std::vector<float> li = formatTensor(LiTensor);
-    std::vector<float> lij = formatTensor(LijTensor);
-    std::vector<float> lnew = formatTensor(LnewTensor);
 
-    // -------- YOUR CODE HERE  -------- //
+    // Initialize according to pseudocode
+    std::vector<float> I(N, 0.0f); // li from pseudocode
 
-    // DO NOT EDIT THIS RETURN STATEMENT //
-    // It formats your C++ Vector O back into a Tensor of Shape (B, H, N, d) and returns it //
+    for (int b = 0; b < B; ++b)
+    {
+        for (int h = 0; h < H; ++h)
+        {
+            std::fill(I.begin(), I.end(), 0.0f);
+
+            // Process K/V blocks (Tc blocks)
+            for (int j_start = 0; j_start < N; j_start += Bc)
+            {
+                int j_end = std::min(j_start + Bc, N);
+                int actual_Bc = j_end - j_start;
+
+                // Load K_j block
+                std::vector<float> Kj(actual_Bc * d);
+                for (int j = 0; j < actual_Bc; ++j)
+                {
+                    int col_idx = j_start + j;
+                    for (int k = 0; k < d; ++k)
+                    {
+                        Kj[j * d + k] = fourDimRead(K, b, h, col_idx, k, H, N, d);
+                    }
+                }
+
+                // Load V_j block
+                std::vector<float> Vj(actual_Bc * d);
+                for (int j = 0; j < actual_Bc; ++j)
+                {
+                    int col_idx = j_start + j;
+                    for (int k = 0; k < d; ++k)
+                    {
+                        Vj[j * d + k] = fourDimRead(V, b, h, col_idx, k, H, N, d);
+                    }
+                }
+
+                // Process Q blocks (Tr blocks)
+                for (int i_start = 0; i_start < N; i_start += Br)
+                {
+                    int i_end = std::min(i_start + Br, N);
+                    int actual_Br = i_end - i_start;
+
+                    // Load Q_i block
+                    std::vector<float> Qi(actual_Br * d);
+                    for (int i = 0; i < actual_Br; ++i)
+                    {
+                        int row_idx = i_start + i;
+                        for (int k = 0; k < d; ++k)
+                        {
+                            Qi[i * d + k] = fourDimRead(Q, b, h, row_idx, k, H, N, d);
+                        }
+                    }
+
+                    // Compute Sij = Qi * Kj^T
+                    std::vector<float> Sij(actual_Br * actual_Bc);
+                    for (int i = 0; i < actual_Br; ++i)
+                    {
+                        for (int j = 0; j < actual_Bc; ++j)
+                        {
+                            float sum = 0.0f;
+                            for (int k = 0; k < d; ++k)
+                            {
+                                sum += Qi[i * d + k] * Kj[j * d + k];
+                            }
+                            Sij[i * actual_Bc + j] = sum;
+                        }
+                    }
+
+                    // Compute Pij = exp(Sij)
+                    std::vector<float> Pij(actual_Br * actual_Bc);
+                    for (int i = 0; i < actual_Br; ++i)
+                    {
+                        for (int j = 0; j < actual_Bc; ++j)
+                        {
+                            Pij[i * actual_Bc + j] = exp(Sij[i * actual_Bc + j]);
+                        }
+                    }
+
+                    // Compute lij = rowsum(Pij)
+                    std::vector<float> lij(actual_Br);
+                    for (int i = 0; i < actual_Br; ++i)
+                    {
+                        float sum = 0.0f;
+                        for (int j = 0; j < actual_Bc; ++j)
+                        {
+                            sum += Pij[i * actual_Bc + j];
+                        }
+                        lij[i] = sum;
+                    }
+
+                    // Update output (strict pseudocode translation)
+                    for (int i = 0; i < actual_Br; ++i)
+                    {
+                        int row_idx = i_start + i;
+                        float Inew = I[row_idx] + lij[i];
+
+                        if (Inew > 0)
+                        { // Prevent division by zero
+                            // Scale existing values
+                            for (int k = 0; k < d; ++k)
+                            {
+                                float current_val = fourDimRead(O, b, h, row_idx, k, H, N, d);
+                                current_val *= I[row_idx] / Inew;
+
+                                // Add new contributions
+                                for (int j = 0; j < actual_Bc; ++j)
+                                {
+                                    float p = Pij[i * actual_Bc + j] / Inew;
+                                    current_val += p * Vj[j * d + k];
+                                }
+
+                                fourDimWrite(O, b, h, row_idx, k, H, N, d, current_val);
+                            }
+                        }
+
+                        // Update I (li)
+                        I[row_idx] = Inew;
+                    }
+                }
+            }
+        }
+    }
     return torch::from_blob(O.data(), {B, H, N, d}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
 }
-
 /* DO NOT EDIT THESE BINDINGS */
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
